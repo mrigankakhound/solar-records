@@ -1,0 +1,10 @@
+Options -MultiViews
+RewriteEngine On
+RewriteBase /form/
+
+# If requesting a real file or directory, serve it directly
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+
+# Otherwise rewrite to index.html
+RewriteRule ^ /form/index.html [L]
