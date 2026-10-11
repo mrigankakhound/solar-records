@@ -279,7 +279,7 @@ const drawPhotoSection = (doc, title, imgBuffer, startY, maxHeight) => {
 };
 
 // ─── MAIN GENERATE FUNCTION ───────────────────────────────────────────────────
-const generatePDF = async (record, outputStream) => {
+const generatePDF = async (record) => {
   // Load logos
   const pmLogoBuffer = loadLocalAsset('pm.png');
   const drtLogoBuffer = loadLocalAsset('DRTlogo.png');
@@ -312,8 +312,6 @@ const generatePDF = async (record, outputStream) => {
   const laBuf          = await fetchPhoto(record.laPhoto,         'LA');
   const additionalBuf  = await fetchPhoto(record.additionalPhoto, 'Additional');
 
-  // Create PDF and pipe to output BEFORE drawing anything
-  // This streams data out as it's generated — never fully in memory
   const doc = new PDFDocument({
     size: 'A4',
     margin: 0,
@@ -324,8 +322,12 @@ const generatePDF = async (record, outputStream) => {
     },
   });
 
-  // Pipe to the output stream immediately
-  doc.pipe(outputStream);
+  const chunks = [];
+  doc.on('data', chunk => chunks.push(chunk));
+  const pdfPromise = new Promise((resolve, reject) => {
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+  });
 
   // ── PAGE 1: Consumer Info + Inverter Photo ──────────────────────────────────
   drawHeader(doc, pmLogoBuffer, drtLogoBuffer);
@@ -367,8 +369,8 @@ const generatePDF = async (record, outputStream) => {
     drawPhotoSection(doc, 'LA PHOTO', laBuf, CONTENT_TOP, CONTENT_AREA_HEIGHT);
   }
 
-  // Finalize — flushes remaining data to outputStream
   doc.end();
+  return await pdfPromise;
 };
 
 module.exports = { generatePDF };

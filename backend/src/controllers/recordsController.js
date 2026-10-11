@@ -315,21 +315,18 @@ const downloadPDF = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Record not found.' });
     }
 
+    const pdfBuffer = await generatePDF(record);
+
     const safeName = record.consumerName.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 50);
     const filename = `DRT_Solar_${safeName}_${record._id}.pdf`;
 
     res.set({
       'Content-Type': 'application/pdf',
       'Content-Disposition': `attachment; filename="${filename}"`,
+      'Content-Length': pdfBuffer.length,
     });
 
-    // Pass res directly — generatePDF pipes to it as content is generated
-    // Data streams out immediately without buffering the whole PDF in memory
-    await new Promise((resolve, reject) => {
-      res.on('finish', resolve);
-      res.on('error', reject);
-      generatePDF(record, res).catch(reject);
-    });
+    res.end(pdfBuffer);
 
   } catch (error) {
     console.error('PDF generation error:', error);
