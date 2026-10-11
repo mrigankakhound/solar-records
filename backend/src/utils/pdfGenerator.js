@@ -1,5 +1,6 @@
 const PDFDocument = require('pdfkit');
-const fetch = require('node-fetch');
+const https = require('https');
+const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
@@ -42,12 +43,49 @@ const formatDate = (date) => {
   return `${dd}/${mm}/${yyyy}`;
 };
 
-const fetchImageBuffer = async (url) => {
-  const response = await fetch(url, { timeout: 20000 });
-  if (!response.ok) throw new Error(`Failed to fetch image: ${url} (${response.status})`);
-  const buffer = await response.buffer();
-  return buffer;
+const fetchImageBuffer = (url) => {
+  return new Promise((resolve, reject) => {
+    const protocol = url.startsWith('https') ? https : http;
+    const timeout = setTimeout(() => reject(new Error(`Timeout fetching: ${url}`)), 30000);
+
+    const request = protocol.get(url, (res) => {
+      // Follow redirects
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        clearTimeout(timeout);
+        return fetchImageBuffer(res.headers.location).then(resolve).catch(reject);
+      }
+      if (res.statusCode !== 200) {
+        clearTimeout(timeout);
+        return reject(new Error(`HTTP ${res.statusCode} fetching: ${url}`));
+      }
+      const chunks = [];
+      res.on('data', chunk => chunks.push(chunk));
+      res.on('end', () => {
+        clearTimeout(timeout);
+        resolve(Buffer.concat(chunks));
+      });
+      res.on('error', (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
+    });
+
+    request.on('error', (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    });
+  });
 };
+
+// Force JPEG + limit to 1200px wide for PDF (saves ~70% memory vs full-res)
+const toPdfImageUrl = (url) => {
+  if (!url) return url;
+  if (url.includes('cloudinary.com') && url.includes('/upload/')) {
+    return url.replace('/upload/', '/upload/f_jpg,q_75,w_1200,c_limit/');
+  }
+  return url;
+};
+
 
 const loadLocalAsset = (filename) => {
   const assetPath = path.join(__dirname, '../../assets', filename);
@@ -249,26 +287,32 @@ const generatePDF = async (record) => {
   if (!pmLogoBuffer) console.warn('⚠️  pm.png not found in backend/assets/. Header PM logo will be missing.');
   if (!drtLogoBuffer) console.warn('⚠️  DRTlogo.png not found in backend/assets/. Header DRT logo will be missing.');
 
-  // Fetch all photos from Cloudinary
+  // Fetch all photos from Cloudinary sequentially (avoids connection saturation)
+  // Also forces JPEG format so PDFKit can always render them
   const fetchPhoto = async (photo, label) => {
-    if (!photo || !photo.url) return null;
+    if (!photo || !photo.url) {
+      console.log(`ℹ️  ${label}: no URL, skipping`);
+      return null;
+    }
+    const jpegUrl = toPdfImageUrl(photo.url);
+    console.log(`📷 Fetching ${label}: ${jpegUrl}`);
     try {
-      return await fetchImageBuffer(photo.url);
+      const buf = await fetchImageBuffer(jpegUrl);
+      console.log(`✅ ${label}: fetched ${buf.length} bytes`);
+      return buf;
     } catch (e) {
-      console.warn(`⚠️  Could not fetch ${label} photo: ${e.message}`);
+      console.warn(`⚠️  ${label} fetch failed: ${e.message}`);
       return null;
     }
   };
 
-  const [inverterBuf, panelBuf, earthBuf, laBuf, additionalBuf] = await Promise.all([
-    fetchPhoto(record.inverterPhoto, 'Inverter'),
-    fetchPhoto(record.panelPhoto, 'Panel'),
-    fetchPhoto(record.earthPhoto, 'Earth'),
-    fetchPhoto(record.laPhoto, 'LA'),
-    fetchPhoto(record.additionalPhoto, 'Additional'),
-  ]);
+  const inverterBuf    = await fetchPhoto(record.inverterPhoto,   'Inverter');
+  const panelBuf       = await fetchPhoto(record.panelPhoto,      'Panel');
+  const earthBuf       = await fetchPhoto(record.earthPhoto,      'Earth');
+  const laBuf          = await fetchPhoto(record.laPhoto,         'LA');
+  const additionalBuf  = await fetchPhoto(record.additionalPhoto, 'Additional');
 
-  // Create PDF
+  // Create PDF — stream directly to avoid buffering entire PDF in memory
   const doc = new PDFDocument({
     size: 'A4',
     margin: 0,
@@ -278,14 +322,6 @@ const generatePDF = async (record) => {
       Author: 'DRT ENTERPRISE',
       Subject: 'Solar Installation Record',
     },
-  });
-
-  const chunks = [];
-  doc.on('data', chunk => chunks.push(chunk));
-
-  const pdfPromise = new Promise((resolve, reject) => {
-    doc.on('end', () => resolve(Buffer.concat(chunks)));
-    doc.on('error', reject);
   });
 
   // ── PAGE 1: Consumer Info + Inverter Photo ──────────────────────────────────
@@ -332,7 +368,7 @@ const generatePDF = async (record) => {
   }
 
   doc.end();
-  return await pdfPromise;
+  return doc; // Return the stream — caller pipes it to response
 };
 
 module.exports = { generatePDF };
