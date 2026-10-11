@@ -312,16 +312,24 @@ const generatePDF = async (record) => {
   const laBuf          = await fetchPhoto(record.laPhoto,         'LA');
   const additionalBuf  = await fetchPhoto(record.additionalPhoto, 'Additional');
 
-  // Create PDF — stream directly to avoid buffering entire PDF in memory
+  // Create PDF document
   const doc = new PDFDocument({
     size: 'A4',
     margin: 0,
-    bufferPages: true,
     info: {
       Title: `DRT Solar Record - ${record.consumerName}`,
       Author: 'DRT ENTERPRISE',
       Subject: 'Solar Installation Record',
     },
+  });
+
+  // Collect chunks into buffer
+  const chunks = [];
+  doc.on('data', chunk => chunks.push(chunk));
+
+  const pdfPromise = new Promise((resolve, reject) => {
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
   });
 
   // ── PAGE 1: Consumer Info + Inverter Photo ──────────────────────────────────
@@ -368,7 +376,7 @@ const generatePDF = async (record) => {
   }
 
   doc.end();
-  return doc; // Return the stream — caller pipes it to response
+  return await pdfPromise; // Returns a valid Buffer
 };
 
 module.exports = { generatePDF };

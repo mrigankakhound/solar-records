@@ -315,33 +315,22 @@ const downloadPDF = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Record not found.' });
     }
 
+    const pdfBuffer = await generatePDF(record);
+
     const safeName = record.consumerName.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 50);
     const filename = `DRT_Solar_${safeName}_${record._id}.pdf`;
 
-    // Set headers before streaming starts
     res.set({
       'Content-Type': 'application/pdf',
       'Content-Disposition': `attachment; filename="${filename}"`,
+      'Content-Length': pdfBuffer.length,
     });
 
-    // generatePDF now returns the PDFDocument stream — pipe directly to response
-    // This avoids holding the entire PDF in memory (prevents OOM on Render free tier)
-    const pdfStream = await generatePDF(record);
-
-    pdfStream.pipe(res);
-
-    pdfStream.on('error', (err) => {
-      console.error('PDF stream error:', err);
-      if (!res.headersSent) {
-        res.status(500).json({ success: false, message: 'PDF generation failed.' });
-      }
-    });
+    res.send(pdfBuffer);
 
   } catch (error) {
     console.error('PDF generation error:', error);
-    if (!res.headersSent) {
-      res.status(500).json({ success: false, message: error.message || 'Failed to generate PDF.' });
-    }
+    res.status(500).json({ success: false, message: error.message || 'Failed to generate PDF.' });
   }
 };
 
