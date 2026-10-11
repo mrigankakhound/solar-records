@@ -77,15 +77,13 @@ const fetchImageBuffer = (url) => {
   });
 };
 
-// Force JPEG + limit to 600px wide for PDF
-// PDF content width is ~523pt so 600px is plenty — saves ~75% memory vs 1200px
+// Force JPEG + limit to 400px wide for PDF
+// PDF content is only 523pt wide — 400px is sufficient and uses ~55% less RAM than 600px
 const toPdfImageUrl = (url) => {
   if (!url) return url;
   if (!url.includes('cloudinary.com') || !url.includes('/upload/')) return url;
-  // Strip any existing transformations before inserting ours
-  const cleanUrl = url.replace(/\/upload\/(?:[^/]+\/)*v\d+\//, (m) => m.replace(/[^/]+\/(?=v\d+\/)/, ''));
-  // Simple replace: insert our transform after /upload/
-  return url.replace(/\/upload\/(?:[^/]+\/)?/, '/upload/f_jpg,q_60,w_600,c_limit/');
+  // Strip any existing transformations and insert ours
+  return url.replace(/\/upload\/(?:[^/]+\/)?/, '/upload/f_jpg,q_50,w_400,c_limit/');
 };
 
 
@@ -282,50 +280,33 @@ const drawPhotoSection = (doc, title, imgBuffer, startY, maxHeight) => {
 
 // ─── MAIN GENERATE FUNCTION ───────────────────────────────────────────────────
 const _generatePDF = async (record) => {
-  console.log(`📄 Starting PDF generation for: ${record.consumerName} (${record._id})`);
+  console.log(`📄 PDF start: ${record.consumerName} | RAM: ${Math.round(process.memoryUsage().heapUsed/1024/1024)}MB`);
   const startTime = Date.now();
 
-  // Load logos (tiny local files)
+  // Load logos from disk (tiny local files)
   const pmLogoBuffer = loadLocalAsset('pm.png');
   const drtLogoBuffer = loadLocalAsset('DRTlogo.png');
-  console.log(`🖼️  Logos: pm=${pmLogoBuffer ? pmLogoBuffer.length + 'B' : 'missing'}, drt=${drtLogoBuffer ? drtLogoBuffer.length + 'B' : 'missing'}`);
+  console.log(`🖼️ Logos: pm=${pmLogoBuffer?.length}B drt=${drtLogoBuffer?.length}B`);
 
-  // Fetch photos from Cloudinary sequentially — one at a time to cap peak RAM
   const fetchPhoto = async (photo, label) => {
-    if (!photo || !photo.url) {
-      console.log(`ℹ️  ${label}: no URL, skipping`);
-      return null;
-    }
-    const jpegUrl = toPdfImageUrl(photo.url);
-    console.log(`📷 Fetching ${label}: ${jpegUrl}`);
+    if (!photo?.url) { console.log(`➖ ${label}: no URL`); return null; }
+    const url = toPdfImageUrl(photo.url);
+    console.log(`⏬ ${label}: fetching ${url}`);
     try {
-      const buf = await fetchImageBuffer(jpegUrl);
-      console.log(`✅ ${label}: fetched ${buf.length} bytes`);
+      const buf = await fetchImageBuffer(url);
+      console.log(`✅ ${label}: ${buf.length}B | RAM: ${Math.round(process.memoryUsage().heapUsed/1024/1024)}MB`);
       return buf;
     } catch (e) {
-      console.warn(`⚠️  ${label} fetch failed: ${e.message}`);
+      console.warn(`⚠️ ${label}: ${e.message}`);
       return null;
     }
   };
 
-  // Fetch sequentially — never hold more than ~2 images in RAM at once
-  const inverterBuf   = await fetchPhoto(record.inverterPhoto,   'Inverter');
-  const panelBuf      = await fetchPhoto(record.panelPhoto,      'Panel');
-  const earthBuf      = await fetchPhoto(record.earthPhoto,      'Earth');
-  const laBuf         = await fetchPhoto(record.laPhoto,         'LA');
-  const additionalBuf = await fetchPhoto(record.additionalPhoto, 'Additional');
-
-  console.log(`📊 RAM before PDF build: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`);
-
-  const doc = new PDFDocument({
-    size: 'A4',
-    margin: 0,
-    info: {
-      Title: `DRT Solar Record - ${record.consumerName}`,
-      Author: 'DRT ENTERPRISE',
-      Subject: 'Solar Installation Record',
-    },
-  });
+  const doc = new PDFDocument({ size: 'A4', margin: 0, info: {
+    Title: `DRT Solar Record - ${record.consumerName}`,
+    Author: 'DRT ENTERPRISE',
+    Subject: 'Solar Installation Record',
+  }});
 
   const chunks = [];
   doc.on('data', chunk => chunks.push(chunk));
@@ -334,62 +315,56 @@ const _generatePDF = async (record) => {
     doc.on('error', reject);
   });
 
-  // ── PAGE 1: Consumer Info + Inverter Photo ──────────────────────────────────
+  // ── PAGE 1 ─────────────────────────────────────────────────────────────────────
   drawHeader(doc, pmLogoBuffer, drtLogoBuffer);
   drawFooter(doc, 1, 3);
-
   const afterTableY = drawInfoTable(doc, record);
 
-  const inverterGap = 10;
-  const inverterStartY = afterTableY + inverterGap;
-  const inverterMaxH = CONTENT_BOTTOM - inverterStartY;
+  // Fetch inverter only for page 1
+  const inverterBuf = await fetchPhoto(record.inverterPhoto, 'Inverter');
+  const inverterMaxH = CONTENT_BOTTOM - (afterTableY + 10);
+  if (inverterMaxH > 30) drawPhotoSection(doc, 'INVERTER PHOTO', inverterBuf, afterTableY + 10, inverterMaxH);
 
-  if (inverterMaxH > 30) {
-    drawPhotoSection(doc, 'INVERTER PHOTO', inverterBuf, inverterStartY, inverterMaxH);
-  }
-  // Free inverter buffer — page 1 is drawn
-  // eslint-disable-next-line no-unused-vars
-
-  // ── PAGE 2: Panel Photo + Earth Photo ──────────────────────────────────────
+  // ── PAGE 2 ─────────────────────────────────────────────────────────────────────
   doc.addPage();
   drawHeader(doc, pmLogoBuffer, drtLogoBuffer);
   drawFooter(doc, 2, 3);
 
-  const page2TotalH = CONTENT_AREA_HEIGHT;
-  const gap2 = 12;
-  const halfH = (page2TotalH - gap2) / 2;
-
+  const halfH = (CONTENT_AREA_HEIGHT - 12) / 2;
+  const panelBuf = await fetchPhoto(record.panelPhoto, 'Panel');
   drawPhotoSection(doc, 'PANEL PHOTO', panelBuf, CONTENT_TOP, halfH);
-  drawPhotoSection(doc, 'EARTH PHOTO', earthBuf, CONTENT_TOP + halfH + gap2, halfH);
+  const earthBuf = await fetchPhoto(record.earthPhoto, 'Earth');
+  drawPhotoSection(doc, 'EARTH PHOTO', earthBuf, CONTENT_TOP + halfH + 12, halfH);
 
-  // ── PAGE 3: LA Photo + Optional Additional Photo ───────────────────────────
+  // ── PAGE 3 ─────────────────────────────────────────────────────────────────────
   doc.addPage();
   drawHeader(doc, pmLogoBuffer, drtLogoBuffer);
   drawFooter(doc, 3, 3);
 
+  const laBuf = await fetchPhoto(record.laPhoto, 'LA');
+  const additionalBuf = await fetchPhoto(record.additionalPhoto, 'Additional');
+
   if (additionalBuf) {
-    const gap3 = 12;
-    const halfH3 = (CONTENT_AREA_HEIGHT - gap3) / 2;
+    const halfH3 = (CONTENT_AREA_HEIGHT - 12) / 2;
     drawPhotoSection(doc, 'LA PHOTO', laBuf, CONTENT_TOP, halfH3);
-    drawPhotoSection(doc, 'ADDITIONAL PHOTO', additionalBuf, CONTENT_TOP + halfH3 + gap3, halfH3);
+    drawPhotoSection(doc, 'ADDITIONAL PHOTO', additionalBuf, CONTENT_TOP + halfH3 + 12, halfH3);
   } else {
     drawPhotoSection(doc, 'LA PHOTO', laBuf, CONTENT_TOP, CONTENT_AREA_HEIGHT);
   }
 
   doc.end();
   const pdfBuffer = await pdfPromise;
-  console.log(`✅ PDF done in ${Date.now() - startTime}ms, size: ${(pdfBuffer.length / 1024).toFixed(0)}KB, RAM: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`);
+  console.log(`✅ PDF done: ${(pdfBuffer.length/1024).toFixed(0)}KB in ${Date.now()-startTime}ms | RAM: ${Math.round(process.memoryUsage().heapUsed/1024/1024)}MB`);
   return pdfBuffer;
 };
 
-// Wrap with a 90-second timeout to prevent hanging requests
-const generatePDF = (record) => {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('PDF generation timed out after 90s')), 90000);
-    _generatePDF(record)
-      .then((buf) => { clearTimeout(timer); resolve(buf); })
-      .catch((err) => { clearTimeout(timer); reject(err); });
-  });
-};
+// 90-second timeout wrapper
+const generatePDF = (record) => new Promise((resolve, reject) => {
+  const timer = setTimeout(() => reject(new Error('PDF generation timed out after 90s')), 90000);
+  _generatePDF(record)
+    .then(buf => { clearTimeout(timer); resolve(buf); })
+    .catch(err => { clearTimeout(timer); reject(err); });
+});
+
 
 module.exports = { generatePDF };
