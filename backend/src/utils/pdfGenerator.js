@@ -279,7 +279,7 @@ const drawPhotoSection = (doc, title, imgBuffer, startY, maxHeight) => {
 };
 
 // ─── MAIN GENERATE FUNCTION ───────────────────────────────────────────────────
-const generatePDF = async (record) => {
+const generatePDF = async (record, outputStream) => {
   // Load logos
   const pmLogoBuffer = loadLocalAsset('pm.png');
   const drtLogoBuffer = loadLocalAsset('DRTlogo.png');
@@ -312,7 +312,8 @@ const generatePDF = async (record) => {
   const laBuf          = await fetchPhoto(record.laPhoto,         'LA');
   const additionalBuf  = await fetchPhoto(record.additionalPhoto, 'Additional');
 
-  // Create PDF document
+  // Create PDF and pipe to output BEFORE drawing anything
+  // This streams data out as it's generated — never fully in memory
   const doc = new PDFDocument({
     size: 'A4',
     margin: 0,
@@ -323,14 +324,8 @@ const generatePDF = async (record) => {
     },
   });
 
-  // Collect chunks into buffer
-  const chunks = [];
-  doc.on('data', chunk => chunks.push(chunk));
-
-  const pdfPromise = new Promise((resolve, reject) => {
-    doc.on('end', () => resolve(Buffer.concat(chunks)));
-    doc.on('error', reject);
-  });
+  // Pipe to the output stream immediately
+  doc.pipe(outputStream);
 
   // ── PAGE 1: Consumer Info + Inverter Photo ──────────────────────────────────
   drawHeader(doc, pmLogoBuffer, drtLogoBuffer);
@@ -338,7 +333,6 @@ const generatePDF = async (record) => {
 
   const afterTableY = drawInfoTable(doc, record);
 
-  // Gap between table and inverter photo section
   const inverterGap = 10;
   const inverterStartY = afterTableY + inverterGap;
   const inverterMaxH = CONTENT_BOTTOM - inverterStartY;
@@ -365,18 +359,16 @@ const generatePDF = async (record) => {
   drawFooter(doc, 3, 3);
 
   if (additionalBuf) {
-    // Two photos: split page
     const gap3 = 12;
     const halfH3 = (CONTENT_AREA_HEIGHT - gap3) / 2;
     drawPhotoSection(doc, 'LA PHOTO', laBuf, CONTENT_TOP, halfH3);
     drawPhotoSection(doc, 'ADDITIONAL PHOTO', additionalBuf, CONTENT_TOP + halfH3 + gap3, halfH3);
   } else {
-    // One photo: use full page
     drawPhotoSection(doc, 'LA PHOTO', laBuf, CONTENT_TOP, CONTENT_AREA_HEIGHT);
   }
 
+  // Finalize — flushes remaining data to outputStream
   doc.end();
-  return await pdfPromise; // Returns a valid Buffer
 };
 
 module.exports = { generatePDF };
