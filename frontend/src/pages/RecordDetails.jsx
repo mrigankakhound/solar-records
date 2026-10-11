@@ -7,7 +7,7 @@ const formatDate = (dateStr) => {
   if (!dateStr) return '—';
   const d = new Date(dateStr);
   if (isNaN(d.getTime())) return '—';
-  return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
+  return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
 };
 
 const PhotoCard = ({ title, photo }) => {
@@ -61,9 +61,8 @@ export default function RecordDetails() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-    } catch (err) {
-      const msg = err.response?.data?.message || err.message || 'PDF generation failed.';
-      alert(`PDF Error: ${msg}`);
+    } catch {
+      alert('PDF generation failed.');
     } finally {
       setDownloadingPDF(false);
     }

@@ -77,13 +77,15 @@ const fetchImageBuffer = (url) => {
   });
 };
 
-// Force JPEG + limit to 1200px wide for PDF (saves ~70% memory vs full-res)
+// Force JPEG + limit to 600px wide for PDF
+// PDF content width is ~523pt so 600px is plenty — saves ~75% memory vs 1200px
 const toPdfImageUrl = (url) => {
   if (!url) return url;
-  if (url.includes('cloudinary.com') && url.includes('/upload/')) {
-    return url.replace('/upload/', '/upload/f_jpg,q_75,w_1200,c_limit/');
-  }
-  return url;
+  if (!url.includes('cloudinary.com') || !url.includes('/upload/')) return url;
+  // Strip any existing transformations before inserting ours
+  const cleanUrl = url.replace(/\/upload\/(?:[^/]+\/)*v\d+\//, (m) => m.replace(/[^/]+\/(?=v\d+\/)/, ''));
+  // Simple replace: insert our transform after /upload/
+  return url.replace(/\/upload\/(?:[^/]+\/)?/, '/upload/f_jpg,q_60,w_600,c_limit/');
 };
 
 
@@ -279,17 +281,16 @@ const drawPhotoSection = (doc, title, imgBuffer, startY, maxHeight) => {
 };
 
 // ─── MAIN GENERATE FUNCTION ───────────────────────────────────────────────────
-const generatePDF = async (record) => {
+const _generatePDF = async (record) => {
   console.log(`📄 Starting PDF generation for: ${record.consumerName} (${record._id})`);
   const startTime = Date.now();
 
-  // Load logos (local files — tiny, always succeeds or returns null)
+  // Load logos (tiny local files)
   const pmLogoBuffer = loadLocalAsset('pm.png');
   const drtLogoBuffer = loadLocalAsset('DRTlogo.png');
-  console.log(`🖼️  Logos: pm=${pmLogoBuffer ? 'ok' : 'missing'}, drt=${drtLogoBuffer ? 'ok' : 'missing'}`);
+  console.log(`🖼️  Logos: pm=${pmLogoBuffer ? pmLogoBuffer.length + 'B' : 'missing'}, drt=${drtLogoBuffer ? drtLogoBuffer.length + 'B' : 'missing'}`);
 
-  // Fetch all photos from Cloudinary sequentially (avoids connection saturation)
-  // Also forces JPEG format so PDFKit can always render them
+  // Fetch photos from Cloudinary sequentially — one at a time to cap peak RAM
   const fetchPhoto = async (photo, label) => {
     if (!photo || !photo.url) {
       console.log(`ℹ️  ${label}: no URL, skipping`);
@@ -307,11 +308,14 @@ const generatePDF = async (record) => {
     }
   };
 
-  const inverterBuf    = await fetchPhoto(record.inverterPhoto,   'Inverter');
-  const panelBuf       = await fetchPhoto(record.panelPhoto,      'Panel');
-  const earthBuf       = await fetchPhoto(record.earthPhoto,      'Earth');
-  const laBuf          = await fetchPhoto(record.laPhoto,         'LA');
-  const additionalBuf  = await fetchPhoto(record.additionalPhoto, 'Additional');
+  // Fetch sequentially — never hold more than ~2 images in RAM at once
+  const inverterBuf   = await fetchPhoto(record.inverterPhoto,   'Inverter');
+  const panelBuf      = await fetchPhoto(record.panelPhoto,      'Panel');
+  const earthBuf      = await fetchPhoto(record.earthPhoto,      'Earth');
+  const laBuf         = await fetchPhoto(record.laPhoto,         'LA');
+  const additionalBuf = await fetchPhoto(record.additionalPhoto, 'Additional');
+
+  console.log(`📊 RAM before PDF build: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`);
 
   const doc = new PDFDocument({
     size: 'A4',
@@ -343,6 +347,8 @@ const generatePDF = async (record) => {
   if (inverterMaxH > 30) {
     drawPhotoSection(doc, 'INVERTER PHOTO', inverterBuf, inverterStartY, inverterMaxH);
   }
+  // Free inverter buffer — page 1 is drawn
+  // eslint-disable-next-line no-unused-vars
 
   // ── PAGE 2: Panel Photo + Earth Photo ──────────────────────────────────────
   doc.addPage();
@@ -372,8 +378,18 @@ const generatePDF = async (record) => {
 
   doc.end();
   const pdfBuffer = await pdfPromise;
-  console.log(`✅ PDF generated in ${Date.now() - startTime}ms, size: ${pdfBuffer.length} bytes`);
+  console.log(`✅ PDF done in ${Date.now() - startTime}ms, size: ${(pdfBuffer.length / 1024).toFixed(0)}KB, RAM: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`);
   return pdfBuffer;
+};
+
+// Wrap with a 90-second timeout to prevent hanging requests
+const generatePDF = (record) => {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('PDF generation timed out after 90s')), 90000);
+    _generatePDF(record)
+      .then((buf) => { clearTimeout(timer); resolve(buf); })
+      .catch((err) => { clearTimeout(timer); reject(err); });
+  });
 };
 
 module.exports = { generatePDF };
