@@ -315,13 +315,22 @@ const _generatePDF = async (record) => {
     doc.on('error', reject);
   });
 
+  // Fetch ALL images in parallel — total time = slowest single fetch (~5s) not sum of all (~22s)
+  console.log(`⚡ Fetching all images in parallel...`);
+  const [inverterBuf, panelBuf, earthBuf, laBuf, additionalBuf] = await Promise.all([
+    fetchPhoto(record.inverterPhoto,   'Inverter'),
+    fetchPhoto(record.panelPhoto,      'Panel'),
+    fetchPhoto(record.earthPhoto,      'Earth'),
+    fetchPhoto(record.laPhoto,         'LA'),
+    fetchPhoto(record.additionalPhoto, 'Additional'),
+  ]);
+  console.log(`⚡ All images fetched in ${Date.now()-startTime}ms`);
+
   // ── PAGE 1 ─────────────────────────────────────────────────────────────────────
   drawHeader(doc, pmLogoBuffer, drtLogoBuffer);
   drawFooter(doc, 1, 3);
   const afterTableY = drawInfoTable(doc, record);
 
-  // Fetch inverter only for page 1
-  const inverterBuf = await fetchPhoto(record.inverterPhoto, 'Inverter');
   const inverterMaxH = CONTENT_BOTTOM - (afterTableY + 10);
   if (inverterMaxH > 30) drawPhotoSection(doc, 'INVERTER PHOTO', inverterBuf, afterTableY + 10, inverterMaxH);
 
@@ -331,18 +340,13 @@ const _generatePDF = async (record) => {
   drawFooter(doc, 2, 3);
 
   const halfH = (CONTENT_AREA_HEIGHT - 12) / 2;
-  const panelBuf = await fetchPhoto(record.panelPhoto, 'Panel');
   drawPhotoSection(doc, 'PANEL PHOTO', panelBuf, CONTENT_TOP, halfH);
-  const earthBuf = await fetchPhoto(record.earthPhoto, 'Earth');
   drawPhotoSection(doc, 'EARTH PHOTO', earthBuf, CONTENT_TOP + halfH + 12, halfH);
 
   // ── PAGE 3 ─────────────────────────────────────────────────────────────────────
   doc.addPage();
   drawHeader(doc, pmLogoBuffer, drtLogoBuffer);
   drawFooter(doc, 3, 3);
-
-  const laBuf = await fetchPhoto(record.laPhoto, 'LA');
-  const additionalBuf = await fetchPhoto(record.additionalPhoto, 'Additional');
 
   if (additionalBuf) {
     const halfH3 = (CONTENT_AREA_HEIGHT - 12) / 2;
