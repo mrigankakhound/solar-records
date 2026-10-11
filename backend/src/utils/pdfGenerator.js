@@ -280,12 +280,13 @@ const drawPhotoSection = (doc, title, imgBuffer, startY, maxHeight) => {
 
 // ─── MAIN GENERATE FUNCTION ───────────────────────────────────────────────────
 const generatePDF = async (record) => {
-  // Load logos
+  console.log(`📄 Starting PDF generation for: ${record.consumerName} (${record._id})`);
+  const startTime = Date.now();
+
+  // Load logos (local files — tiny, always succeeds or returns null)
   const pmLogoBuffer = loadLocalAsset('pm.png');
   const drtLogoBuffer = loadLocalAsset('DRTlogo.png');
-
-  if (!pmLogoBuffer) console.warn('⚠️  pm.png not found in backend/assets/. Header PM logo will be missing.');
-  if (!drtLogoBuffer) console.warn('⚠️  DRTlogo.png not found in backend/assets/. Header DRT logo will be missing.');
+  console.log(`🖼️  Logos: pm=${pmLogoBuffer ? 'ok' : 'missing'}, drt=${drtLogoBuffer ? 'ok' : 'missing'}`);
 
   // Fetch all photos from Cloudinary sequentially (avoids connection saturation)
   // Also forces JPEG format so PDFKit can always render them
@@ -370,7 +371,9 @@ const generatePDF = async (record) => {
   }
 
   doc.end();
-  return await pdfPromise;
+  const pdfBuffer = await pdfPromise;
+  console.log(`✅ PDF generated in ${Date.now() - startTime}ms, size: ${pdfBuffer.length} bytes`);
+  return pdfBuffer;
 };
 
 module.exports = { generatePDF };

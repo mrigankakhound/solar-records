@@ -61,8 +61,9 @@ export default function RecordDetails() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-    } catch {
-      alert('PDF generation failed.');
+    } catch (err) {
+      const msg = err.response?.data?.message || err.message || 'PDF generation failed.';
+      alert(`PDF Error: ${msg}`);
     } finally {
       setDownloadingPDF(false);
     }
