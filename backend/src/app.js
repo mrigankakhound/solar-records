@@ -14,10 +14,13 @@ app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
 // CORS
 const allowedOrigins = [
-  process.env.CLIENT_URL || 'http://localhost:5173',
+  'https://drtweb.in',
+  'https://www.drtweb.in',
   'http://localhost:5173',
+  'http://localhost:5174',
   'http://localhost:3000',
-];
+  process.env.CLIENT_URL,
+].filter(Boolean);
 
 app.use(cors({
   origin: (origin, callback) => {
