@@ -77,13 +77,27 @@ const fetchImageBuffer = (url) => {
   });
 };
 
-// Force JPEG + limit to 400px wide for PDF
-// PDF content is only 523pt wide — 400px is sufficient and uses ~55% less RAM than 600px
+// Request PDF-optimised images from Cloudinary for every photo, every format.
+// w_1200,h_1200,c_limit — fit inside a 1200×1200 box without cropping
+// q_auto:good            — auto quality, good tier (~70–80% quality)
+// f_jpg                  — force JPEG (smallest for photos)
+//
+// Why this matters: A4 PDF is 595 pt wide. Even at 144 DPI, photos never need
+// more than ~1200 px. Without this, a 12 MP phone photo uploaded as JPEG would
+// be fetched at full resolution (4032×3024 px, 3–8 MB) for every PDF request.
+// With this transform Cloudinary serves a cached ~200–500 KB image instead.
+//
+// NOTE: The previous code short-circuited for .jpg/.jpeg files (the most common
+// format) and applied zero optimisation. That was the primary cause of the
+// memory spike on Render's 512 MB instance.
 const toPdfImageUrl = (url) => {
-  if (!url) return url;
-  if (!url.includes('cloudinary.com') || !url.includes('/upload/')) return url;
-  // Strip any existing transformations and insert ours
-  return url.replace(/\/upload\/(?:[^/]+\/)?/, '/upload/f_jpg,q_50,w_400,c_limit/');
+  if (!url) return null;
+  if (url.includes('cloudinary.com') && url.includes('/upload/')) {
+    // Prepend PDF-specific transforms directly after /upload/.
+    // Cloudinary stacks them with any existing upload-time transforms — safe.
+    return url.replace('/upload/', '/upload/w_1200,h_1200,c_limit,q_auto:good,f_jpg/');
+  }
+  return url;
 };
 
 
@@ -280,7 +294,12 @@ const drawPhotoSection = (doc, title, imgBuffer, startY, maxHeight) => {
 
 // ─── MAIN GENERATE FUNCTION ───────────────────────────────────────────────────
 const _generatePDF = async (record) => {
-  console.log(`📄 PDF start: ${record.consumerName} | RAM: ${Math.round(process.memoryUsage().heapUsed/1024/1024)}MB`);
+  const mem = process.memoryUsage();
+  console.log(
+    `📄 PDF start: ${record.consumerName}` +
+    ` | heap: ${Math.round(mem.heapUsed/1024/1024)}MB` +
+    ` | rss: ${Math.round(mem.rss/1024/1024)}MB`
+  );
   const startTime = Date.now();
 
   // Load logos from disk (tiny local files)
@@ -358,17 +377,52 @@ const _generatePDF = async (record) => {
 
   doc.end();
   const pdfBuffer = await pdfPromise;
-  console.log(`✅ PDF done: ${(pdfBuffer.length/1024).toFixed(0)}KB in ${Date.now()-startTime}ms | RAM: ${Math.round(process.memoryUsage().heapUsed/1024/1024)}MB`);
+  const memAfter = process.memoryUsage();
+  console.log(
+    `✅ PDF done: ${(pdfBuffer.length/1024).toFixed(0)}KB` +
+    ` in ${Date.now()-startTime}ms` +
+    ` | heap: ${Math.round(memAfter.heapUsed/1024/1024)}MB` +
+    ` | rss: ${Math.round(memAfter.rss/1024/1024)}MB`
+  );
   return pdfBuffer;
 };
 
-// 90-second timeout wrapper
-const generatePDF = (record) => new Promise((resolve, reject) => {
-  const timer = setTimeout(() => reject(new Error('PDF generation timed out after 90s')), 90000);
-  _generatePDF(record)
-    .then(buf => { clearTimeout(timer); resolve(buf); })
-    .catch(err => { clearTimeout(timer); reject(err); });
-});
+// ─── CONCURRENCY LIMITER ──────────────────────────────────────────────────────
+// Render's free/starter tier enforces a 512 MB RSS hard limit.
+// Each PDF generation holds 5 image Buffers + PDFKit internals in memory
+// simultaneously. Limiting to 2 concurrent jobs prevents the multiplicative
+// spike that would breach the RSS limit under simultaneous requests.
+let _activePdfJobs = 0;
+const MAX_CONCURRENT_PDF = 2;
 
+// 90-second timeout wrapper with concurrency guard
+const generatePDF = (record) => new Promise((resolve, reject) => {
+  if (_activePdfJobs >= MAX_CONCURRENT_PDF) {
+    return reject(new Error(
+      `PDF generation is busy (${_activePdfJobs} job(s) running). Please try again in a moment.`
+    ));
+  }
+
+  _activePdfJobs++;
+  console.log(`🔄 PDF jobs active: ${_activePdfJobs}/${MAX_CONCURRENT_PDF}`);
+
+  const timer = setTimeout(() => {
+    _activePdfJobs--;
+    reject(new Error('PDF generation timed out after 90s'));
+  }, 90000);
+
+  _generatePDF(record)
+    .then(buf => {
+      clearTimeout(timer);
+      _activePdfJobs--;
+      console.log(`🔄 PDF jobs active after completion: ${_activePdfJobs}/${MAX_CONCURRENT_PDF}`);
+      resolve(buf);
+    })
+    .catch(err => {
+      clearTimeout(timer);
+      _activePdfJobs--;
+      reject(err);
+    });
+});
 
 module.exports = { generatePDF };

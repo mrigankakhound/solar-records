@@ -132,34 +132,47 @@ const getAllRecords = async (req, res) => {
     const allowedSortFields = ['consumerName', 'consumerNo', 'plantCapacity', 'installationDate', 'createdAt'];
     const sortField = allowedSortFields.includes(sortBy) ? sortBy : 'createdAt';
 
-    const [records, total] = await Promise.all([
+    // Run all four queries in parallel — no all-records fetch needed.
+    // The capacity sum is computed by MongoDB aggregation, not in Node.js.
+    const [records, filteredTotal, totalCount, capacityAgg] = await Promise.all([
       ConsumerRecord.find(query)
         .sort({ [sortField]: sortDir })
         .skip(skip)
         .limit(limitNum)
         .select('-__v'),
-      ConsumerRecord.countDocuments(query),
+      ConsumerRecord.countDocuments(query),       // filtered total (for pagination)
+      ConsumerRecord.countDocuments(),             // all-records total (for stats)
+      ConsumerRecord.aggregate([
+        {
+          $group: {
+            _id: null,
+            total: {
+              $sum: {
+                $convert: {
+                  input: { $arrayElemAt: [{ $split: ['$plantCapacity', ' '] }, 0] },
+                  to: 'int',
+                  onError: 0,
+                  onNull: 0,
+                },
+              },
+            },
+          },
+        },
+      ]),
     ]);
-
-    // Stats
-    const allRecords = await ConsumerRecord.find({}, 'plantCapacity');
-    const totalCapacity = allRecords.reduce((sum, r) => {
-      const kw = parseInt(r.plantCapacity);
-      return sum + (isNaN(kw) ? 0 : kw);
-    }, 0);
 
     res.json({
       success: true,
       data: records,
       pagination: {
-        total,
+        total: filteredTotal,
         page: pageNum,
         limit: limitNum,
-        totalPages: Math.ceil(total / limitNum),
+        totalPages: Math.ceil(filteredTotal / limitNum),
       },
       stats: {
-        totalRecords: await ConsumerRecord.countDocuments(),
-        totalCapacityKW: totalCapacity,
+        totalRecords: totalCount,
+        totalCapacityKW: capacityAgg[0]?.total ?? 0,
       },
     });
 
@@ -331,7 +344,12 @@ const downloadPDF = async (req, res) => {
   } catch (error) {
     console.error('PDF generation error:', error);
     if (!res.headersSent) {
-      res.status(500).json({ success: false, message: error.message || 'Failed to generate PDF.' });
+      // Return 429 for concurrency-limit errors so clients know to retry, not report a server fault
+      const isBusy = error.message?.includes('PDF generation is busy');
+      res.status(isBusy ? 429 : 500).json({
+        success: false,
+        message: error.message || 'Failed to generate PDF.',
+      });
     }
   }
 };
