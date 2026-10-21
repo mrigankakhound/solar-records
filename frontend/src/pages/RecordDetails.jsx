@@ -61,8 +61,21 @@ export default function RecordDetails() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-    } catch {
-      alert('PDF generation failed.');
+    } catch (err) {
+      // When responseType:'blob', error bodies also arrive as Blobs — parse them to get the real message.
+      let msg = 'PDF generation failed. Please try again.';
+      if (err.response?.data instanceof Blob) {
+        try {
+          const text = await err.response.data.text();
+          const json = JSON.parse(text);
+          if (json?.message) msg = json.message;
+        } catch { /* blob was not JSON — keep generic message */ }
+      } else if (err.response?.data?.message) {
+        msg = err.response.data.message;
+      } else if (err.message) {
+        msg = err.message;
+      }
+      alert(msg);
     } finally {
       setDownloadingPDF(false);
     }

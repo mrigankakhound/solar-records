@@ -90,7 +90,20 @@ export default function AdminDashboard() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } catch (err) {
-      alert('PDF generation failed. Please try again.');
+      // When responseType:'blob', error bodies also arrive as Blobs — parse them.
+      let msg = 'PDF generation failed. Please try again.';
+      if (err.response?.data instanceof Blob) {
+        try {
+          const text = await err.response.data.text();
+          const json = JSON.parse(text);
+          if (json?.message) msg = json.message;
+        } catch { /* blob was not JSON — keep generic message */ }
+      } else if (err.response?.data?.message) {
+        msg = err.response.data.message;
+      } else if (err.message) {
+        msg = err.message;
+      }
+      alert(msg);
     } finally {
       setDownloadingId(null);
     }

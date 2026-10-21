@@ -110,7 +110,7 @@ const loadLocalAsset = (filename) => {
 };
 
 // ─── DRAW HEADER ─────────────────────────────────────────────────────────────
-const drawHeader = (doc, pmLogoBuffer, drtLogoBuffer) => {
+const drawHeader = (doc, pmLogoBuffer, drtLogoBuffer, showLogos = true) => {
   const y = MARGIN;
   const logoH = 65;
   const pmLogoW = 70;
@@ -121,8 +121,8 @@ const drawHeader = (doc, pmLogoBuffer, drtLogoBuffer) => {
   doc.rect(MARGIN, y, CONTENT_WIDTH, HEADER_HEIGHT)
     .fill(COLORS.white);
 
-  // PM Surya Ghar logo — LEFT
-  if (pmLogoBuffer) {
+  // PM Surya Ghar logo — LEFT (page 1 only)
+  if (showLogos && pmLogoBuffer) {
     try {
       doc.image(pmLogoBuffer, MARGIN, y + (HEADER_HEIGHT - logoH) / 2, {
         fit: [pmLogoW, logoH],
@@ -134,9 +134,9 @@ const drawHeader = (doc, pmLogoBuffer, drtLogoBuffer) => {
     }
   }
 
-  // DRT Enterprise logo — RIGHT
+  // DRT Enterprise logo — RIGHT (page 1 only)
   const rightLogoX = MARGIN + CONTENT_WIDTH - drtLogoW - 15;
-  if (drtLogoBuffer) {
+  if (showLogos && drtLogoBuffer) {
     try {
       doc.image(drtLogoBuffer, rightLogoX, y + (HEADER_HEIGHT - logoH) / 2, {
         fit: [drtLogoW, logoH],
@@ -336,12 +336,11 @@ const _generatePDF = async (record) => {
 
   // Fetch ALL images in parallel — total time = slowest single fetch (~5s) not sum of all (~22s)
   console.log(`⚡ Fetching all images in parallel...`);
-  const [inverterBuf, panelBuf, earthBuf, laBuf, additionalBuf] = await Promise.all([
-    fetchPhoto(record.inverterPhoto,   'Inverter'),
-    fetchPhoto(record.panelPhoto,      'Panel'),
-    fetchPhoto(record.earthPhoto,      'Earth'),
-    fetchPhoto(record.laPhoto,         'LA'),
-    fetchPhoto(record.additionalPhoto, 'Additional'),
+  const [inverterBuf, panelBuf, earthBuf, laBuf] = await Promise.all([
+    fetchPhoto(record.inverterPhoto, 'Inverter'),
+    fetchPhoto(record.panelPhoto,    'Panel'),
+    fetchPhoto(record.earthPhoto,    'Earth'),
+    fetchPhoto(record.laPhoto,       'LA'),
   ]);
   console.log(`⚡ All images fetched in ${Date.now()-startTime}ms`);
 
@@ -355,7 +354,7 @@ const _generatePDF = async (record) => {
 
   // ── PAGE 2 ─────────────────────────────────────────────────────────────────────
   doc.addPage();
-  drawHeader(doc, pmLogoBuffer, drtLogoBuffer);
+  drawHeader(doc, pmLogoBuffer, drtLogoBuffer, false);
   drawFooter(doc, 2, 3);
 
   const halfH = (CONTENT_AREA_HEIGHT - 12) / 2;
@@ -364,16 +363,10 @@ const _generatePDF = async (record) => {
 
   // ── PAGE 3 ─────────────────────────────────────────────────────────────────────
   doc.addPage();
-  drawHeader(doc, pmLogoBuffer, drtLogoBuffer);
+  drawHeader(doc, pmLogoBuffer, drtLogoBuffer, false);
   drawFooter(doc, 3, 3);
 
-  if (additionalBuf) {
-    const halfH3 = (CONTENT_AREA_HEIGHT - 12) / 2;
-    drawPhotoSection(doc, 'LA PHOTO', laBuf, CONTENT_TOP, halfH3);
-    drawPhotoSection(doc, 'ADDITIONAL PHOTO', additionalBuf, CONTENT_TOP + halfH3 + 12, halfH3);
-  } else {
-    drawPhotoSection(doc, 'LA PHOTO', laBuf, CONTENT_TOP, CONTENT_AREA_HEIGHT);
-  }
+  drawPhotoSection(doc, 'LA PHOTO', laBuf, CONTENT_TOP, CONTENT_AREA_HEIGHT);
 
   doc.end();
   const pdfBuffer = await pdfPromise;
