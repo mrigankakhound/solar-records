@@ -103,10 +103,24 @@ const toPdfImageUrl = (url) => {
 
 const loadLocalAsset = (filename) => {
   const assetPath = path.join(__dirname, '../../assets', filename);
-  if (fs.existsSync(assetPath)) {
-    return fs.readFileSync(assetPath);
+  if (!fs.existsSync(assetPath)) return null;
+  const buf = fs.readFileSync(assetPath);
+  // Safety guard: warn if a PNG logo is suspiciously large (> 1000 px on either axis).
+  // PDFKit decompresses the full PNG bitmap into RAM when embedding; a 6250×6250 RGBA
+  // image costs ~156 MB of heap, which silently OOMs Render's 512 MB instance.
+  // This was the root cause of the "logs stop after All images fetched" failure.
+  if (buf.length > 4 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+    const w = buf.readUInt32BE(16);
+    const h = buf.readUInt32BE(20);
+    const decompMB = ((w * h * 4) / 1024 / 1024).toFixed(1);
+    if (w > 1000 || h > 1000) {
+      console.warn(
+        `⚠️  Logo "${filename}" is ${w}×${h}px — decompresses to ~${decompMB} MB in RAM.` +
+        ` Resize it to ≤ 600 px to avoid OOM on Render.`
+      );
+    }
   }
-  return null;
+  return buf;
 };
 
 // ─── DRAW HEADER ─────────────────────────────────────────────────────────────
